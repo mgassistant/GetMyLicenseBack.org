@@ -1,4 +1,4 @@
-import { clientIP, emailVerdictNote, rawWithEmailVerdict, verifyEmail } from './_emailVerification.js';
+import { badEmailFlag, clientIP, emailVerdictNote, rawWithEmailVerdict, verifyEmail } from './_emailVerification.js';
 const BROKERIQ_URL = process.env.BROKERIQ_URL || "https://www.broker-iq.com/api/leads/inbound";
 const BROKERIQ_TENANT_ID = process.env.BROKERIQ_TENANT_ID || "6db07734-dd08-49ff-9a23-2e5c5f9fb46a";
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
@@ -26,7 +26,10 @@ export default async function handler(req, res) {
   // the phone number may still be good. Fails open.
   const emailCheck = await verifyEmail(email, clientIP(req));
   lead.raw = rawWithEmailVerdict(lead.raw, emailCheck);
-  if (lead.raw.suspected_spam) console.log(`[SPAM] Soft-flagged [${lead.raw.spam_flags.join(',')}] lead from ${lead.source}`);
+  // Log only the flag this check produced: a client-supplied raw.spam_flags may
+  // not be an array, and must never be able to throw before the lead is forwarded.
+  const emailFlag = badEmailFlag(emailCheck);
+  if (emailFlag) console.log(`[SPAM] Soft-flagged [${emailFlag}] lead from ${lead.source}`);
   await Promise.allSettled([
     (async()=>{ try{ await fetch(BROKERIQ_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(lead)}); }catch(e){console.error('brokeriq',e);} })(),
     (async()=>{ if(!RESEND_API_KEY||!NOTIFY_TO)return; try{ await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({from:NOTIFY_FROM,to:NOTIFY_TO.split(',').map(s=>s.trim()).filter(Boolean),subject:`${(b.partial===true||b.partial==="true") ? "[PARTIAL LEAD] " : ""}New Get My License Back lead: ${name||email||phone||'(no name)'}`,html:`<h2>${(b.partial===true||b.partial==="true") ? "[PARTIAL — form not completed] " : ""}New Get My License Back lead</h2><p><b>Name:</b> ${esc(name)}</p><p><b>Email:</b> ${esc(email)}${esc(emailVerdictNote(email, emailCheck))}</p><p><b>Phone:</b> ${esc(phone)}</p>${detailLines?`<p><b>Details:</b></p><pre>${esc(detailLines)}</pre>`:''}${notes?`<p><b>Notes:</b> ${esc(notes)}</p>`:''}<p style="color:#888">Source: getmylicenseback.org</p>`})}); }catch(e){console.error('resend',e);} })(),
